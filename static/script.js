@@ -1,0 +1,1012 @@
+// DOM Elements
+const chatContainer = document.getElementById('chat');
+const messagesContainer = document.getElementById('messages');
+const chatForm = document.getElementById('chatForm');
+const userInput = document.getElementById('userInput');
+const sendBtn = document.getElementById('sendBtn');
+const welcomeScreen = document.getElementById('welcome');
+const charCount = document.getElementById('charCount');
+const themeToggle = document.getElementById('themeToggle');
+const clearChatBtn = document.getElementById('clearChatBtn');
+const menuBtn = document.getElementById('menuBtn');
+const sidebar = document.getElementById('sidebar');
+const sidebarClose = document.getElementById('sidebarClose');
+const newChatBtn = document.getElementById('newChatBtn');
+const chatHistory = document.getElementById('chatHistory');
+const toastContainer = document.getElementById('toastContainer');
+
+let isLoading = false;
+let chatSessions = JSON.parse(localStorage.getItem('chatSessions') || '[]');
+let currentSessionId = Date.now().toString();
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    initTheme();
+    loadChatHistory();
+    updateCharCount();
+    userInput.focus();
+});
+
+// Theme Management
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', savedTheme);
+    updateLogoGradient(savedTheme);
+}
+
+function updateLogoGradient(theme) {
+    const logoPath = document.querySelector('.logo-path');
+    if (logoPath) {
+        logoPath.setAttribute('stroke', theme === 'light' ? 'url(#brandGradLight)' : 'url(#brandGradDark)');
+    }
+}
+
+if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+        const currentTheme = document.documentElement.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', newTheme);
+        localStorage.setItem('theme', newTheme);
+        updateLogoGradient(newTheme);
+        showToast(`Switched to ${newTheme} theme`, 'success');
+    });
+}
+
+// Sidebar Management
+if (menuBtn) {
+    menuBtn.addEventListener('click', () => {
+        sidebar.classList.add('open');
+        createOverlay();
+    });
+}
+
+if (sidebarClose) {
+    sidebarClose.addEventListener('click', closeSidebar);
+}
+
+function createOverlay() {
+    const overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay show';
+    overlay.id = 'sidebarOverlay';
+    overlay.addEventListener('click', closeSidebar);
+    document.body.appendChild(overlay);
+}
+
+function closeSidebar() {
+    sidebar.classList.remove('open');
+    const overlay = document.getElementById('sidebarOverlay');
+    if (overlay) overlay.remove();
+}
+
+// New Chat
+if (newChatBtn) {
+    newChatBtn.addEventListener('click', () => {
+        saveChatSession();
+        clearMessages();
+        currentSessionId = Date.now().toString();
+        closeSidebar();
+        showToast('New chat started', 'success');
+    });
+}
+
+// Clear Chat
+if (clearChatBtn) {
+    clearChatBtn.addEventListener('click', () => {
+        if (messagesContainer.children.length === 0) {
+            showToast('Chat is already empty', 'info');
+            return;
+        }
+        clearMessages();
+        showToast('Chat cleared', 'success');
+    });
+}
+
+function clearMessages() {
+    messagesContainer.innerHTML = '';
+    if (welcomeScreen) {
+        welcomeScreen.style.display = 'flex';
+    }
+}
+
+// Chat History
+function saveChatSession() {
+    if (messagesContainer.children.length === 0) return;
+
+    const firstMessage = messagesContainer.querySelector('.message.user .msg-content');
+    const title = firstMessage ? firstMessage.textContent.substring(0, 40) + '...' : 'Chat Session';
+
+    const session = {
+        id: currentSessionId,
+        title: title,
+        timestamp: Date.now(),
+        messages: messagesContainer.innerHTML
+    };
+
+    const existingIndex = chatSessions.findIndex(s => s.id === currentSessionId);
+    if (existingIndex >= 0) {
+        chatSessions[existingIndex] = session;
+    } else {
+        chatSessions.unshift(session);
+    }
+
+    chatSessions = chatSessions.slice(0, 20); // Keep only last 20
+    localStorage.setItem('chatSessions', JSON.stringify(chatSessions));
+    loadChatHistory();
+}
+
+function loadChatHistory() {
+    if (!chatHistory) return;
+
+    chatHistory.innerHTML = chatSessions.map(session => `
+        <div class="chat-history-item" data-id="${session.id}">
+            <div class="title">${escapeHtml(session.title)}</div>
+            <div class="time">${formatTimestamp(session.timestamp)}</div>
+        </div>
+    `).join('');
+
+    chatHistory.querySelectorAll('.chat-history-item').forEach(item => {
+        item.addEventListener('click', () => {
+            const session = chatSessions.find(s => s.id === item.dataset.id);
+            if (session) {
+                saveChatSession();
+                currentSessionId = session.id;
+                messagesContainer.innerHTML = session.messages;
+                if (welcomeScreen) welcomeScreen.style.display = 'none';
+                closeSidebar();
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        });
+    });
+}
+
+function formatTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    const now = new Date();
+    const diff = now - date;
+
+    if (diff < 60000) return 'Just now';
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
+    return date.toLocaleDateString();
+}
+
+// Character Count
+function updateCharCount() {
+    if (charCount) {
+        charCount.textContent = userInput.value.length;
+    }
+}
+
+// Auto-resize textarea
+userInput.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    updateCharCount();
+});
+
+// Handle Enter key
+userInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatForm.dispatchEvent(new Event('submit'));
+    }
+});
+
+// Handle form submission
+chatForm.addEventListener('submit', async function (e) {
+    e.preventDefault();
+
+    const message = userInput.value.trim();
+    if (!message || isLoading) return;
+
+    // Hide welcome
+    if (welcomeScreen) {
+        welcomeScreen.style.display = 'none';
+    }
+
+    // Add user message
+    addMessage(message, 'user');
+
+    // Detect file path in message and load into editor
+    const filePathMatch = message.match(/([A-Za-z]:[\\\/][^\s'"]+\.[a-zA-Z0-9]+)/);
+    if (filePathMatch) {
+        const filePath = filePathMatch[1];
+        await loadFileInEditor(filePath);
+    }
+
+    // Clear input
+    userInput.value = '';
+    userInput.style.height = 'auto';
+    updateCharCount();
+
+    // Loading state
+    isLoading = true;
+    sendBtn.disabled = true;
+    sendBtn.classList.add('loading');
+    const loadingEl = addLoadingMessage();
+
+    try {
+        // Build request with editor context if file is loaded
+        const requestBody = { message };
+        if (currentEditorFile && codeEditor && codeEditor.value) {
+            requestBody.file_path = currentEditorFile;
+            requestBody.file_content = codeEditor.value;
+        }
+
+        const response = await fetch('/api/chat', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody)
+        });
+
+        const data = await response.json();
+        loadingEl.remove();
+
+        if (data.error) {
+            addMessage('⚠️ ' + data.error, 'bot');
+            showToast('Error: ' + data.error, 'error');
+        } else {
+            addMessage(data.response, 'bot');
+
+            // Extract code from response and stream to editor
+            const codeMatch = data.response.match(/```[\w]*\n?([\s\S]*?)```/);
+            if (codeMatch && currentEditorFile) {
+                const newCode = codeMatch[1].trim();
+                await streamCodeToEditor(newCode);
+            }
+
+            saveChatSession();
+        }
+    } catch (error) {
+        loadingEl.remove();
+        addMessage('⚠️ Connection error. Please try again.', 'bot');
+        showToast('Connection error', 'error');
+    } finally {
+        isLoading = false;
+        sendBtn.disabled = false;
+        sendBtn.classList.remove('loading');
+        userInput.focus();
+    }
+});
+
+// Stream code to editor with typing animation
+async function streamCodeToEditor(code) {
+    if (!codeEditor || !editorPanel.classList.contains('open')) {
+        openEditor();
+    }
+
+    // Add streaming class for visual effect
+    editorPanel.classList.add('streaming');
+    editorStatus.textContent = 'Streaming...';
+    editorStatus.className = 'editor-status streaming';
+
+    // Clear editor and stream character by character
+    codeEditor.value = '';
+
+    const chars = code.split('');
+    let index = 0;
+
+    return new Promise((resolve) => {
+        const streamInterval = setInterval(() => {
+            if (index < chars.length) {
+                codeEditor.value += chars[index];
+                index++;
+
+                // Update every 10 characters for performance
+                if (index % 10 === 0) {
+                    updateLineNumbers();
+                    updateEditorInfo();
+                    codeEditor.scrollTop = codeEditor.scrollHeight;
+                }
+            } else {
+                clearInterval(streamInterval);
+                editorPanel.classList.remove('streaming');
+                updateLineNumbers();
+                updateEditorInfo();
+                setEditorModified(true);
+                editorStatus.textContent = '✓ Code updated';
+                editorStatus.className = 'editor-status saved';
+                showToast('Code streamed to editor', 'success');
+                resolve();
+            }
+        }, 5); // 5ms per character for fast streaming effect
+    });
+}
+
+function addMessage(content, type) {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${type}`;
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+
+    if (type === 'user') {
+        avatar.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    } else {
+        avatar.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+    }
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg-wrapper';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'msg-content';
+    contentDiv.innerHTML = formatMessage(content);
+
+    const timeDiv = document.createElement('div');
+    timeDiv.className = 'msg-time';
+    timeDiv.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    wrapper.appendChild(contentDiv);
+    wrapper.appendChild(timeDiv);
+
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(wrapper);
+    messagesContainer.appendChild(messageDiv);
+
+    // Smooth scroll to bottom
+    requestAnimationFrame(() => {
+        chatContainer.scrollTo({
+            top: chatContainer.scrollHeight,
+            behavior: 'smooth'
+        });
+    });
+
+    // Highlight code blocks
+    messageDiv.querySelectorAll('pre code').forEach((block) => {
+        if (window.Prism) {
+            Prism.highlightElement(block);
+        }
+    });
+}
+
+function addLoadingMessage() {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = 'message bot loading-message';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'msg-avatar';
+    avatar.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>';
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'msg-wrapper';
+
+    const contentDiv = document.createElement('div');
+    contentDiv.className = 'msg-content';
+    contentDiv.innerHTML = `
+        <div class="loading-dots">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+    `;
+
+    wrapper.appendChild(contentDiv);
+    messageDiv.appendChild(avatar);
+    messageDiv.appendChild(wrapper);
+    messagesContainer.appendChild(messageDiv);
+
+    chatContainer.scrollTo({
+        top: chatContainer.scrollHeight,
+        behavior: 'smooth'
+    });
+
+    return messageDiv;
+}
+
+function formatMessage(content) {
+    let formatted = escapeHtml(content);
+
+    // Code blocks with language
+    formatted = formatted.replace(/```(\w*)\n?([\s\S]*?)```/g, (match, lang, code) => {
+        const language = lang || 'plaintext';
+        return `
+            <div class="code-block-wrapper">
+                <div class="code-header">
+                    <span class="code-lang">${language}</span>
+                    <button class="copy-btn" onclick="copyCode(this)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        </svg>
+                        Copy
+                    </button>
+                </div>
+                <pre><code class="language-${language}">${code.trim()}</code></pre>
+            </div>`;
+    });
+
+    // Inline code
+    formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+
+    // Bold
+    formatted = formatted.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    // Italic
+    formatted = formatted.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+    // Line breaks (but not inside pre)
+    const parts = formatted.split(/(<div class="code-block-wrapper">[\s\S]*?<\/div>)/g);
+    formatted = parts.map(part => {
+        if (part.includes('code-block-wrapper')) return part;
+        return part.replace(/\n/g, '<br>');
+    }).join('');
+
+    return formatted;
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function copyCode(button) {
+    const codeBlock = button.closest('.code-block-wrapper').querySelector('code');
+    const text = codeBlock.textContent;
+
+    navigator.clipboard.writeText(text).then(() => {
+        button.classList.add('copied');
+        button.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="20 6 9 17 4 12"/>
+            </svg>
+            Copied!`;
+
+        showToast('Code copied to clipboard', 'success');
+
+        setTimeout(() => {
+            button.classList.remove('copied');
+            button.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+                Copy`;
+        }, 2000);
+    });
+}
+
+function useSuggestion(text) {
+    userInput.value = text;
+    userInput.focus();
+    userInput.dispatchEvent(new Event('input'));
+}
+
+// Toast Notifications
+function showToast(message, type = 'info') {
+    if (!toastContainer) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+
+    const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
+    toast.innerHTML = `<span class="toast-icon">${icon}</span>${message}`;
+
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+        toast.remove();
+    }, 3000);
+}
+
+// Make copyCode available globally
+window.copyCode = copyCode;
+
+// ==========================================
+// FILE BROWSER
+// ==========================================
+
+const fileBrowserBtn = document.getElementById('fileBrowserBtn');
+const fileBrowserModal = document.getElementById('fileBrowserModal');
+const modalBackdrop = document.getElementById('modalBackdrop');
+const modalClose = document.getElementById('modalClose');
+const driveSelect = document.getElementById('driveSelect');
+const pathInput = document.getElementById('pathInput');
+const goUpBtn = document.getElementById('goUpBtn');
+const goPathBtn = document.getElementById('goPathBtn');
+const fileList = document.getElementById('fileList');
+const previewFileName = document.getElementById('previewFileName');
+const filePreviewContent = document.getElementById('filePreviewContent');
+const useFileBtn = document.getElementById('useFileBtn');
+const copyPathBtn = document.getElementById('copyPathBtn');
+const selectedPathEl = document.getElementById('selectedPath');
+const selectFileBtn = document.getElementById('selectFileBtn');
+
+let currentPath = '';
+let selectedFile = null;
+let parentPath = null;
+
+// Open file browser
+if (fileBrowserBtn) {
+    fileBrowserBtn.addEventListener('click', () => {
+        openFileBrowser();
+    });
+}
+
+// Close file browser
+if (modalClose) {
+    modalClose.addEventListener('click', closeFileBrowser);
+}
+if (modalBackdrop) {
+    modalBackdrop.addEventListener('click', closeFileBrowser);
+}
+
+function openFileBrowser() {
+    fileBrowserModal.classList.add('open');
+    loadDrives();
+}
+
+function closeFileBrowser() {
+    fileBrowserModal.classList.remove('open');
+    selectedFile = null;
+    updateSelectedFile();
+}
+
+// Load available drives
+async function loadDrives() {
+    try {
+        const response = await fetch('/api/drives');
+        const data = await response.json();
+
+        driveSelect.innerHTML = '<option value="">Select Drive</option>';
+        data.drives.forEach(drive => {
+            const option = document.createElement('option');
+            option.value = drive.path;
+            option.textContent = drive.name;
+            driveSelect.appendChild(option);
+        });
+
+        // Load default path (user home)
+        loadFiles('');
+    } catch (error) {
+        showToast('Failed to load drives', 'error');
+    }
+}
+
+// Drive selection
+if (driveSelect) {
+    driveSelect.addEventListener('change', () => {
+        if (driveSelect.value) {
+            loadFiles(driveSelect.value);
+        }
+    });
+}
+
+// Go up button
+if (goUpBtn) {
+    goUpBtn.addEventListener('click', () => {
+        if (parentPath) {
+            loadFiles(parentPath);
+        }
+    });
+}
+
+// Go to path button
+if (goPathBtn) {
+    goPathBtn.addEventListener('click', () => {
+        if (pathInput.value.trim()) {
+            loadFiles(pathInput.value.trim());
+        }
+    });
+}
+
+// Enter key on path input
+if (pathInput) {
+    pathInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            loadFiles(pathInput.value.trim());
+        }
+    });
+}
+
+// Load files from a path
+async function loadFiles(path) {
+    fileList.innerHTML = '<div class="file-list-loading">Loading...</div>';
+
+    try {
+        const url = path ? `/api/files?path=${encodeURIComponent(path)}` : '/api/files';
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (data.error) {
+            fileList.innerHTML = `<div class="file-list-loading">Error: ${data.error}</div>`;
+            showToast(data.error, 'error');
+            return;
+        }
+
+        currentPath = data.currentPath;
+        parentPath = data.parentPath;
+        pathInput.value = currentPath;
+
+        renderFileList(data.items);
+    } catch (error) {
+        fileList.innerHTML = '<div class="file-list-loading">Failed to load files</div>';
+        showToast('Failed to load files', 'error');
+    }
+}
+
+// Render file list
+function renderFileList(items) {
+    if (items.length === 0) {
+        fileList.innerHTML = '<div class="file-list-loading">Empty folder</div>';
+        return;
+    }
+
+    fileList.innerHTML = items.map(item => `
+        <div class="file-item ${item.isDirectory ? 'directory' : ''}" 
+             data-path="${escapeHtml(item.path)}" 
+             data-is-dir="${item.isDirectory}"
+             data-name="${escapeHtml(item.name)}">
+            <div class="file-icon">${getFileIcon(item)}</div>
+            <div class="file-info">
+                <div class="file-name">${escapeHtml(item.name)}</div>
+                <div class="file-meta">${item.isDirectory ? 'Folder' : formatFileSize(item.size)}</div>
+            </div>
+        </div>
+    `).join('');
+
+    // Add click handlers
+    fileList.querySelectorAll('.file-item').forEach(item => {
+        item.addEventListener('click', () => handleFileClick(item));
+        item.addEventListener('dblclick', () => handleFileDoubleClick(item));
+    });
+}
+
+// Get file icon
+function getFileIcon(item) {
+    if (item.isDirectory) return '📁';
+
+    const ext = item.extension;
+    const icons = {
+        '.py': '🐍',
+        '.js': '📜',
+        '.ts': '📘',
+        '.html': '🌐',
+        '.css': '🎨',
+        '.json': '📋',
+        '.md': '📝',
+        '.txt': '📄',
+        '.jpg': '🖼️',
+        '.jpeg': '🖼️',
+        '.png': '🖼️',
+        '.gif': '🖼️',
+        '.pdf': '📕',
+        '.zip': '📦',
+        '.rar': '📦',
+        '.exe': '⚙️',
+        '.sql': '🗃️',
+        '.env': '🔒',
+    };
+
+    return icons[ext] || '📄';
+}
+
+// Format file size
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// Handle file click (select)
+function handleFileClick(item) {
+    // Remove previous selection
+    fileList.querySelectorAll('.file-item.selected').forEach(el => el.classList.remove('selected'));
+
+    // Select this item
+    item.classList.add('selected');
+
+    const isDir = item.dataset.isDir === 'true';
+    const path = item.dataset.path;
+    const name = item.dataset.name;
+
+    if (!isDir) {
+        selectedFile = { path, name };
+        updateSelectedFile();
+        loadFilePreview(path);
+    } else {
+        selectedFile = null;
+        updateSelectedFile();
+        filePreviewContent.innerHTML = '<p class="preview-placeholder">Select a file to preview</p>';
+        previewFileName.textContent = 'Folder selected';
+    }
+}
+
+// Handle file double-click (open directory or select file)
+function handleFileDoubleClick(item) {
+    const isDir = item.dataset.isDir === 'true';
+    const path = item.dataset.path;
+
+    if (isDir) {
+        loadFiles(path);
+    } else {
+        // Double-click on file = select it
+        selectFileForChat();
+    }
+}
+
+// Load file preview
+async function loadFilePreview(path) {
+    previewFileName.textContent = 'Loading...';
+    filePreviewContent.innerHTML = '<p class="preview-placeholder">Loading preview...</p>';
+
+    try {
+        const response = await fetch(`/api/file/read?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+
+        if (data.error) {
+            previewFileName.textContent = 'Error';
+            filePreviewContent.innerHTML = `<p class="preview-placeholder">${data.error}</p>`;
+            return;
+        }
+
+        previewFileName.textContent = data.filename;
+        filePreviewContent.innerHTML = `<pre>${escapeHtml(data.content)}</pre>`;
+    } catch (error) {
+        previewFileName.textContent = 'Error';
+        filePreviewContent.innerHTML = '<p class="preview-placeholder">Failed to load preview</p>';
+    }
+}
+
+// Update selected file display
+function updateSelectedFile() {
+    if (selectedFile) {
+        selectedPathEl.textContent = selectedFile.path;
+        selectFileBtn.disabled = false;
+    } else {
+        selectedPathEl.textContent = 'No file selected';
+        selectFileBtn.disabled = true;
+    }
+}
+
+// Use file in chat
+if (useFileBtn) {
+    useFileBtn.addEventListener('click', () => {
+        if (selectedFile) {
+            const content = filePreviewContent.querySelector('pre')?.textContent || '';
+            userInput.value = `Here's the content of ${selectedFile.name}:\n\n\`\`\`\n${content}\n\`\`\`\n\nPlease analyze this code.`;
+            closeFileBrowser();
+            userInput.focus();
+            showToast('File content added to chat', 'success');
+        }
+    });
+}
+
+// Copy path
+if (copyPathBtn) {
+    copyPathBtn.addEventListener('click', () => {
+        if (selectedFile) {
+            navigator.clipboard.writeText(selectedFile.path);
+            showToast('Path copied to clipboard', 'success');
+        }
+    });
+}
+
+// Select file button
+if (selectFileBtn) {
+    selectFileBtn.addEventListener('click', selectFileForChat);
+}
+
+function selectFileForChat() {
+    if (selectedFile) {
+        // Load file into editor panel
+        loadFileInEditor(selectedFile.path);
+        closeFileBrowser();
+        showToast(`Loaded ${selectedFile.name} into editor`, 'success');
+    }
+}
+
+// Escape key to close modal
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && fileBrowserModal.classList.contains('open')) {
+        closeFileBrowser();
+    }
+});
+
+// ==========================================
+// CODE EDITOR PANEL
+// ==========================================
+
+const toggleEditorBtn = document.getElementById('toggleEditorBtn');
+const editorPanel = document.getElementById('editorPanel');
+const mainContent = document.getElementById('mainContent');
+const editorFileName = document.getElementById('editorFileName');
+const editorPath = document.getElementById('editorPath');
+const codeEditor = document.getElementById('codeEditor');
+const lineNumbers = document.getElementById('lineNumbers');
+const editorSaveBtn = document.getElementById('editorSaveBtn');
+const editorBrowseBtn = document.getElementById('editorBrowseBtn');
+const editorStatus = document.getElementById('editorStatus');
+const editorInfo = document.getElementById('editorInfo');
+
+let currentEditorFile = null;
+let originalContent = '';
+let isEditorModified = false;
+
+// Toggle editor panel
+if (toggleEditorBtn) {
+    toggleEditorBtn.addEventListener('click', toggleEditor);
+}
+
+function toggleEditor() {
+    editorPanel.classList.toggle('open');
+    mainContent.classList.toggle('editor-open');
+}
+
+function openEditor() {
+    editorPanel.classList.add('open');
+    mainContent.classList.add('editor-open');
+}
+
+function closeEditor() {
+    editorPanel.classList.remove('open');
+    mainContent.classList.remove('editor-open');
+}
+
+// Load file into editor
+async function loadFileInEditor(path) {
+    editorStatus.textContent = 'Loading...';
+    editorStatus.className = 'editor-status';
+
+    try {
+        const response = await fetch(`/api/file/read?path=${encodeURIComponent(path)}`);
+        const data = await response.json();
+
+        if (data.error) {
+            showToast(data.error, 'error');
+            editorStatus.textContent = 'Error loading file';
+            return;
+        }
+
+        currentEditorFile = path;
+        originalContent = data.content;
+
+        codeEditor.value = data.content;
+        editorPath.value = path;
+        editorFileName.textContent = data.filename;
+
+        updateLineNumbers();
+        updateEditorInfo();
+        setEditorModified(false);
+
+        openEditor();
+        editorStatus.textContent = 'Ready';
+        showToast(`Opened ${data.filename}`, 'success');
+
+    } catch (error) {
+        showToast('Failed to load file', 'error');
+        editorStatus.textContent = 'Error';
+    }
+}
+
+// Update line numbers
+function updateLineNumbers() {
+    const lines = codeEditor.value.split('\n');
+    const numbers = lines.map((_, i) => i + 1).join('\n');
+    lineNumbers.textContent = numbers;
+}
+
+// Update editor info (lines, characters)
+function updateEditorInfo() {
+    const lines = codeEditor.value.split('\n').length;
+    const chars = codeEditor.value.length;
+    editorInfo.textContent = `Lines: ${lines} | Chars: ${chars}`;
+}
+
+// Track modifications
+function setEditorModified(modified) {
+    isEditorModified = modified;
+    editorSaveBtn.disabled = !modified;
+    editorStatus.className = modified ? 'editor-status modified' : 'editor-status';
+    editorStatus.textContent = modified ? 'Modified' : 'Ready';
+}
+
+// Code editor input handler
+if (codeEditor) {
+    codeEditor.addEventListener('input', () => {
+        updateLineNumbers();
+        updateEditorInfo();
+
+        if (codeEditor.value !== originalContent) {
+            setEditorModified(true);
+        } else {
+            setEditorModified(false);
+        }
+    });
+
+    // Sync scroll between line numbers and textarea
+    codeEditor.addEventListener('scroll', () => {
+        lineNumbers.scrollTop = codeEditor.scrollTop;
+    });
+
+    // Handle Tab key for indentation
+    codeEditor.addEventListener('keydown', (e) => {
+        if (e.key === 'Tab') {
+            e.preventDefault();
+            const start = codeEditor.selectionStart;
+            const end = codeEditor.selectionEnd;
+            codeEditor.value = codeEditor.value.substring(0, start) + '    ' + codeEditor.value.substring(end);
+            codeEditor.selectionStart = codeEditor.selectionEnd = start + 4;
+            updateLineNumbers();
+            setEditorModified(true);
+        }
+
+        // Ctrl+S to save
+        if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+            e.preventDefault();
+            saveEditorFile();
+        }
+    });
+}
+
+// Save file
+async function saveEditorFile() {
+    if (!currentEditorFile || !isEditorModified) return;
+
+    editorStatus.textContent = 'Saving...';
+
+    try {
+        const response = await fetch('/api/file/write', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                path: currentEditorFile,
+                content: codeEditor.value
+            })
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            showToast(data.error, 'error');
+            editorStatus.textContent = 'Save failed';
+            return;
+        }
+
+        originalContent = codeEditor.value;
+        setEditorModified(false);
+        editorStatus.className = 'editor-status saved';
+        editorStatus.textContent = 'Saved';
+        showToast('File saved successfully', 'success');
+
+        setTimeout(() => {
+            if (!isEditorModified) {
+                editorStatus.className = 'editor-status';
+                editorStatus.textContent = 'Ready';
+            }
+        }, 2000);
+
+    } catch (error) {
+        showToast('Failed to save file', 'error');
+        editorStatus.textContent = 'Save failed';
+    }
+}
+
+if (editorSaveBtn) {
+    editorSaveBtn.addEventListener('click', saveEditorFile);
+}
+
+// Browse button in editor
+if (editorBrowseBtn) {
+    editorBrowseBtn.addEventListener('click', () => {
+        openFileBrowser();
+    });
+}
+
+// Override file browser select to load into editor when editor is open
+const originalSelectFileForChat = selectFileForChat;
+selectFileForChat = function () {
+    if (selectedFile && editorPanel.classList.contains('open')) {
+        loadFileInEditor(selectedFile.path);
+        closeFileBrowser();
+    } else {
+        originalSelectFileForChat();
+    }
+};
+
+// Make loadFileInEditor available globally
+window.loadFileInEditor = loadFileInEditor;
+window.toggleEditor = toggleEditor;
